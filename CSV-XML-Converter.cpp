@@ -1,6 +1,6 @@
 // CSV-XML-Converter.cpp
 /*
-CSV-XML-Converter Version 1.0 from 03.03.2019
+CSV-XML-Converter Version 1.1 from 10.03.2019
 
 Command line tool for conversion of data files from CSV to XML and from XML to CSV via mapping definition
 
@@ -953,7 +953,7 @@ xmlNodePtr SetNodeValue(xmlDocPtr pDoc, xmlNodePtr pParentNode, const char * pXP
 	xmlNewProp(node, BAD_CAST "attribute", BAD_CAST "yes");
   */
 
-  if (*pValue || pFieldMapping->xml.bAddEmptyNodes)
+  if (*pValue || pFieldMapping->xml.bMandatory /*|| pFieldMapping->xml.bAddEmptyNodes*/)
   {
     if (pParentNode)
       pRealParentNode = pParentNode;
@@ -963,9 +963,10 @@ xmlNodePtr SetNodeValue(xmlDocPtr pDoc, xmlNodePtr pParentNode, const char * pXP
     xmlNodePtr pNode = GetCreateNode(pParentNode, pXPath, pAttributeNameValueList, pCondition);
     //xmlNodePtr pNode = GetCreateNode(pParentNode, pXPath, pszConditionAttributeName, pszConditionAttributeValue);
 
-    if (strlen(pFieldMapping->xml.szAttribute) == 0)
-      xmlNodeSetContent(pNode, xmlEncodeSpecialChars(pDoc, (const xmlChar *)pValue));
-      // xmlChar *xmlNodeGetContent	(const xmlNode * cur)
+    if (strlen(pFieldMapping->xml.szAttribute) == 0) {
+      if (*pValue)
+        xmlNodeSetContent(pNode, xmlEncodeSpecialChars(pDoc, (const xmlChar *)pValue));
+    }
     else {
       // xmlChar *xmlGetProp (const xmlNode *node, const xmlChar *name)
       // xmlAttrPtr	xmlSetProp(xmlNodePtr node, const xmlChar *name, const xmlChar *value)
@@ -1024,9 +1025,8 @@ void CopyIgnoreString(pchar pszDest, cpchar pszSource, cpchar pszIgnoreChars)
 
   while (*pSource) {
     if (!strchr(pszIgnoreChars, *pSource))
-      *pDest = *pSource;
+      *pDest++ = *pSource;
     pSource++;
-    pDest++;
   }
 
   *pDest = '\0';
@@ -1315,15 +1315,18 @@ int MapDateFormat(cpchar pszSourceValue, cpchar pszSourceFormat, pchar pszDestVa
 
   return nErrorCode;
 }
+// end of function "MapDateFormat"
 
 //--------------------------------------------------------------------------------------------------------
 
 int MapTextFormat(cpchar pszSourceValue, CPFieldDefinition pSourceFieldDef, pchar pszDestValue, CPFieldDefinition pDestFieldDef, int nMaxLen)
 {
   char szShortFormat[MAX_FORMAT_ERROR_SIZE+4];
-  int nLen, nErrorCode = 0;
+  int nLen = (int)strlen(pszSourceValue);
+  int nErrorCode = 0;
 
   *szLastFieldMappingError = '\0';
+  *pszDestValue = '\0';
 
   //if (strcmp(pDestFieldDef->szContent, "CCY") == 0)
   //  nLen = 0;  // for debugging purposes only!
@@ -1331,34 +1334,35 @@ int MapTextFormat(cpchar pszSourceValue, CPFieldDefinition pSourceFieldDef, pcha
   if (!*pszSourceValue && !pSourceFieldDef->bMandatory)
     return 0;  // empty value is allowed for optional fields
 
-  if ((int)strlen(pszSourceValue) > nMaxLen)
+  if (nLen > nMaxLen)
     return -1;  // destination value buffer is too small
 
-  if ((int)strlen(pszSourceValue) < pSourceFieldDef->nMinLen) {
+  if (nLen < pSourceFieldDef->nMinLen) {
     sprintf(szLastFieldMappingError, "Content too short (minimum length %d)", pSourceFieldDef->nMinLen);
     return 1;
   }
 
-  if (pSourceFieldDef->nMaxLen >= 0 && (int)strlen(pszSourceValue) > pSourceFieldDef->nMaxLen) {
+  if (pSourceFieldDef->nMaxLen >= 0 && nLen > pSourceFieldDef->nMaxLen) {
     sprintf(szLastFieldMappingError, "Content too long (maximum length %d)", pSourceFieldDef->nMaxLen);
     return 2;
   }
 
   if (!CheckRegex(pszSourceValue, pSourceFieldDef->szFormat)) {
-    nLen = strlen(pSourceFieldDef->szFormat);
-    if (nLen > MAX_FORMAT_ERROR_LEN) {
-      nLen = MAX_FORMAT_ERROR_LEN;
-      mystrncpy(szShortFormat, pSourceFieldDef->szFormat, nLen + 1);
-      strcpy(szShortFormat + nLen, " ...");
+    // source string does not match regular expression
+    int nLen2 = strlen(pSourceFieldDef->szFormat);
+    if (nLen2 > MAX_FORMAT_ERROR_LEN) {
+      nLen2 = MAX_FORMAT_ERROR_LEN;
+      mystrncpy(szShortFormat, pSourceFieldDef->szFormat, nLen2 + 1);
+      strcpy(szShortFormat + nLen2, " ...");
     }
     else
       strcpy(szShortFormat, pSourceFieldDef->szFormat);
 
     if (*szShortFormat == ',') {
       *szShortFormat = '(';
-      nLen = strlen(szShortFormat);
-      if (nLen > 2 && szShortFormat[nLen-1] == ',')
-        szShortFormat[nLen-1] = ')';
+      nLen2 = strlen(szShortFormat);
+      if (nLen2 > 2 && szShortFormat[nLen2-1] == ',')
+        szShortFormat[nLen2-1] = ')';
       sprintf(szLastFieldMappingError, "Value not found in list %s", szShortFormat);
     }
     else
@@ -1367,11 +1371,37 @@ int MapTextFormat(cpchar pszSourceValue, CPFieldDefinition pSourceFieldDef, pcha
     return 3;
   }
 
-  // source value is valid, so copy source value to destination buffer
-  strcpy(pszDestValue, pszSourceValue);
+  // source value is valid
+  if (*pSourceFieldDef->szFormat == ',' && *pDestFieldDef->szFormat == ',' && strcmp(pSourceFieldDef->szFormat, pDestFieldDef->szFormat) != 0) {
+    // source and destination format contain list of valid strings --> map content
+    cpchar pszSourceFormat = pSourceFieldDef->szFormat + 1;
+    cpchar pszDestFormat = pDestFieldDef->szFormat + 1;
+    cpchar pszTemp = NULL;
+    bool bFound = false;
+
+    while (!bFound && *pszSourceFormat && *pszDestFormat) {
+      if (strncmp(pszSourceFormat, pszSourceValue, nLen) == 0 /*&& strlen(pszSourceFormat) > nLen*/ && pszSourceFormat[nLen] == ',') {
+        CopyStringTill(pszDestValue, pszDestFormat, ',');
+        bFound = true;
+      }
+      else {
+        // goto next string in list of source format
+        pszTemp = strchr(pszSourceFormat, ',');
+        pszSourceFormat = pszTemp ? pszTemp+1 : strchr(pszSourceFormat, '\0');
+        // goto next string in list of destination format
+        pszTemp = strchr(pszDestFormat, ',');
+        pszDestFormat = pszTemp ? pszTemp+1 : strchr(pszDestFormat, '\0');
+      }
+    }
+  }
+  else {
+    // source value is valid, so copy source value to destination buffer
+    strcpy(pszDestValue, pszSourceValue);
+  }
 
   return nErrorCode;
 }
+// end of function "MapTextFormat"
 
 //--------------------------------------------------------------------------------------------------------
 
@@ -3921,7 +3951,7 @@ int main(int argc, char **argv)
   //char ch;
 
   puts("");
-  puts("FundsXML-CSV-Converter Version 1.0 from 03.03.2019");
+  puts("FundsXML-CSV-Converter Version 1.1 from 10.03.2019");
   puts("Open source command line tool for the FundsXML community");
   puts("Source code is available under the MIT open source licence");
   puts("on GitHub: https://github.com/peterraf/csv-xml-converter and http://www.xml-tools.net");
@@ -3942,6 +3972,9 @@ int main(int argc, char **argv)
   // HOLDINGS mappings:
   // convert -c c2x -i holdings.csv -m holdings-mapping.csv -o holdings.xml -e holdings-errors.csv
   // convert -c x2c -i holdings2.xml -m holdings-mapping.csv -t holdings-template.csv -o holdings2.csv -e holdings2-errors.csv
+  //
+  // ROBECO mappings
+  // convert -c c2x -i robeco-holdings.csv -m robeco-holdings-mapping.csv -o robeco-holdings.xml -e robeco-holdings-errors.csv
   //
   // EMT mappings:
   // convert -c c2x -i emt-input.csv -m emt-mapping.csv -o emt-output.xml -e emt-errors.csv
