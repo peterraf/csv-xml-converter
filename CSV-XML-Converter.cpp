@@ -1,6 +1,6 @@
 // CSV-XML-Converter.cpp
 /*
-CSV-XML-Converter Version 1.1 from 10.03.2019
+CSV-XML-Converter Version 1.02 from 01.04.2019
 
 Command line tool for conversion of data files from CSV to XML and from XML to CSV via mapping definition
 
@@ -235,6 +235,7 @@ int anLoopIndex[MAX_LOOPS];
 int anLoopSize[MAX_LOOPS];
 PFieldMapping apLoopFieldMapping[MAX_LOOPS];
 char szCsvHeader[MAX_HEADER_SIZE] = "";
+char szCsvHeader2[MAX_HEADER_SIZE] = "";
 char szLineBuffer[MAX_LINE_SIZE];
 char szFieldValueBuffer[MAX_LINE_SIZE];
 char szUniqueDocumentID[MAX_UNIQUE_DOCUMENT_ID_SIZE];
@@ -1329,7 +1330,7 @@ int MapTextFormat(cpchar pszSourceValue, CPFieldDefinition pSourceFieldDef, pcha
   *pszDestValue = '\0';
 
   //if (strcmp(pDestFieldDef->szContent, "CCY") == 0)
-  //  nLen = 0;  // for debugging purposes only!
+  //  nErrorCode = 0;  // for debugging purposes only!
 
   if (!*pszSourceValue && !pSourceFieldDef->bMandatory)
     return 0;  // empty value is allowed for optional fields
@@ -2412,15 +2413,16 @@ bool MatchingColumnName(cpchar pszColumnName, cpchar pszSearchColumnName)
 
 int ReadCsvData(const char *szFileName)
 {
-  int i, nColumnIndex, nMapIndex, nColumns, nNonEmptyColumns;
+  int i, nColumnIndex, nMapIndex, nColumns, nNonEmptyColumns, nFound;
   char *pColumnName = NULL;
   char szErrorMessage[MAX_ERROR_MESSAGE_SIZE];
+  char szTempHeader[MAX_HEADER_SIZE];
   cpchar szIgnoreXPath = NULL;
   pchar aField[MAX_CSV_COLUMNS];
   FieldMapping *pFieldMapping = NULL;
   FILE *pFile = NULL;
   errno_t error_code;
-  bool bCheck;
+  bool bCheck, bFound;
 
   // initialize number of columns and csv data lines
   nCsvDataColumns = 0;
@@ -2476,8 +2478,8 @@ int ReadCsvData(const char *szFileName)
   }
 
   // save header line
-  memset(szCsvHeader, 0, MAX_HEADER_SIZE);
   mystrncpy(szCsvHeader, pLine, MAX_HEADER_SIZE);
+  *szCsvHeader2 = '\0';
 
   // detect column delimiter
   cColumnDelimiter = GetColumnDelimiter(pLine);
@@ -2560,6 +2562,9 @@ int ReadCsvData(const char *szFileName)
     //if (nRealCsvDataLines >= 761)
     //  i = 0;  // for debugging purposes only!
 
+    if (nRealCsvDataLines == 0 && !*szCsvHeader2)
+      mystrncpy(szTempHeader, pLine, MAX_HEADER_SIZE);
+
     // parse current csv line
     nColumns = GetFields(pLine, cColumnDelimiter, aField, nCsvDataColumns, (nRealCsvDataLines == 0) ? abColumnQuoted : NULL);
 
@@ -2568,6 +2573,30 @@ int ReadCsvData(const char *szFileName)
     for (i = 0; i < nColumns; i++)
       if (*aField[i])
         nNonEmptyColumns++;
+
+    if (nNonEmptyColumns >= 3 && nRealCsvDataLines == 0 && !*szCsvHeader2) {
+      // check existance of second header line
+      nFound = 0;
+
+      for (nMapIndex = 0, pFieldMapping = aFieldMapping; nMapIndex < nFieldMappings; nMapIndex++, pFieldMapping++) {
+        bFound = false;
+
+        if (strchr("CIMU"/*CHANGE,IF,MAP,UNIQUE*/, pFieldMapping->csv.cOperation)) {
+          // search for column name in potential csv header
+          for (nColumnIndex = 0; nColumnIndex < nColumns && !bFound; nColumnIndex++)
+            if (MatchingColumnName(aField[nColumnIndex], pFieldMapping->csv.szContent) || MatchingColumnName(aField[nColumnIndex], pFieldMapping->csv.szContent2)) {
+              bFound = true;
+              nFound++;
+            }
+        }
+      }
+
+      if (nFound >= nCsvDataColumns / 2) {
+        // save second header line, if minimum half of the columns is matching column names
+        mystrncpy(szCsvHeader2, szTempHeader, MAX_HEADER_SIZE);
+        nNonEmptyColumns = 0;
+      }
+    }
 
     if (nNonEmptyColumns >= 3 && nRealCsvDataLines < nCsvDataLines) {
       // copy pointer of fields content to field pointer array
@@ -3597,6 +3626,10 @@ int WriteCsvFile(cpchar szFileName)
   // write template header to file
   fprintf(pFile, "%s\n", szCsvHeader);
 
+  // write second header line, if existing
+  if (*szCsvHeader2)
+    fprintf(pFile, "%s\n", szCsvHeader2);
+
   // get root node of xml document
   xmlNodePtr pRootNode = xmlDocGetRootElement(pXmlDoc);
 
@@ -3951,7 +3984,7 @@ int main(int argc, char **argv)
   //char ch;
 
   puts("");
-  puts("FundsXML-CSV-Converter Version 1.1 from 10.03.2019");
+  puts("FundsXML-CSV-Converter Version 1.02 from 01.04.2019");
   puts("Open source command line tool for the FundsXML community");
   puts("Source code is available under the MIT open source licence");
   puts("on GitHub: https://github.com/peterraf/csv-xml-converter and http://www.xml-tools.net");
@@ -3973,12 +4006,20 @@ int main(int argc, char **argv)
   // convert -c c2x -i holdings.csv -m holdings-mapping.csv -o holdings.xml -e holdings-errors.csv
   // convert -c x2c -i holdings2.xml -m holdings-mapping.csv -t holdings-template.csv -o holdings2.csv -e holdings2-errors.csv
   //
-  // ROBECO mappings
+  // ROBECO mappings:
   // convert -c c2x -i robeco-holdings.csv -m robeco-holdings-mapping.csv -o robeco-holdings.xml -e robeco-holdings-errors.csv
+  //
+  // OPENFUNDS mappings:
+  // convert -c c2x -i openfunds\openfunds-input.csv -m openfunds\openfunds-mapping.csv -o openfunds\openfunds-output.xml -e openfunds\openfunds-csv-errors.csv
+  // convert -c x2c -i openfunds\openfunds-input.xml -m openfunds\openfunds-mapping.csv -t openfunds\openfunds-template.csv -o openfunds\openfunds-output.csv -e openfunds\openfunds-xml-errors.csv
   //
   // EMT mappings:
   // convert -c c2x -i emt-input.csv -m emt-mapping.csv -o emt-output.xml -e emt-errors.csv
   // convert -c x2c -i emt-input.xml -m emt-mapping.csv -t emt-template.csv -o emt-output.csv -e emt-errors.csv
+  //
+  // EMT mappings (openfunds version):
+  // convert -c c2x -i openfunds-emt-input.csv -m openfunds-emt-mapping.csv -o openfunds-emt-output.xml -e openfunds-emt-csv-errors.csv
+  // convert -c x2c -i openfunds-emt-input.xml -m openfunds-emt-mapping.csv -t openfunds-emt-template.csv -o openfunds-emt-output.csv -e openfunds-emt-xml-errors.csv
   //
   // TPT mappings:
   // convert -c c2x -i tpt-input.csv -m tpt-mapping.csv -o tpt-output.xml -e tpt-errors.csv
