@@ -1,6 +1,6 @@
 // CSV-XML-Converter.cpp
 /*
-CSV-XML-Converter Version 1.02 from 01.04.2019
+CSV-XML-Converter Version 1.03 from 27.07.2019
 
 Command line tool for conversion of data files from CSV to XML and from XML to CSV via mapping definition
 
@@ -1071,13 +1071,20 @@ bool IsValidNumber(cpchar pszString, char cDecimalPoint)
 
 bool CheckRegex(cpchar pszString, cpchar pszRegex)
 {
-  // Sample regular expressions: "[A-Z]{3}", "[0-9a-zA-Z]{18}[0-9]{2}"
+  // Sample regular expressions:
+  // Pattern with brackets: "[A-Z]{3}", "[0-9a-zA-Z]{18}[0-9]{2}"
+  // Pattern with dots: "..[B-C]."
   // Enumeration: "(AIF,UCITS)"
+  cpchar pStrPos = pszString;
   cpchar pRegexPos = pszRegex;
-  cpchar pElemEnd = NULL;
+  //cpchar pElemEnd = NULL;
   char szValidChars[256] = "";
   char szSearch[MAX_VALUE_SIZE+2];
-  bool bResult = true;
+  bool bResult = true;  // default
+  bool bMatch;
+
+  if (pszRegex == NULL)
+    return bResult;
 
   if (*pszRegex == ',' /*was originally '(', but already changed during loading of mapping file*/) {
     // Definition of allowed strings (xml enumeration)
@@ -1089,7 +1096,36 @@ bool CheckRegex(cpchar pszString, cpchar pszRegex)
       bResult = (strstr(pszRegex, szSearch) != NULL);
     }
   }
-
+  else
+  if (strstr(pszRegex, ".[") != NULL || strstr(pszRegex, "].") != NULL) {
+    // Samples for patterns with dots: "..[A]." or "..[B-C]."
+    while (*pRegexPos && *pStrPos && bResult) {
+      if (*pRegexPos == '[') {
+        bMatch = false;
+        pRegexPos++;  // skip '['
+        while (*pRegexPos && *pRegexPos != ']' && !bMatch) {
+          if (pRegexPos[1] == '-' && pRegexPos[2]) {
+            bMatch = (*pStrPos >= *pRegexPos && *pStrPos <= pRegexPos[2]);
+            pRegexPos += 3;
+          }
+          else {
+            bMatch = (*pStrPos == *pRegexPos);
+            pRegexPos++;
+          }
+        }
+        while (*pRegexPos && *pRegexPos != ']')
+          pRegexPos++;
+        if (*pRegexPos != ']')
+          bMatch = false; // error in regular expression (closing bracket missing)
+        bResult = bMatch;
+      }
+      else
+        bResult = (*pRegexPos == '.');
+      pRegexPos++;
+      pStrPos++;
+    }
+  }
+  else
   if (*pszRegex == '[') {
     // Definition of allowed pattern with allowed characters
     if (strncmp(pszRegex, "[0-9]", 5) == 0) strcpy(szValidChars, szDigits);
@@ -3359,7 +3395,7 @@ int GenerateXmlDocument()
             bMatch = false;
             pCsvFieldValue = GetCsvFieldValue(nDataLine, pFieldMapping->nCsvIndex);
             if (pCsvFieldValue) {
-              if (pFieldMapping->csv.szFormat[0] == ',')  // originally '('
+              if (strchr(",.[", pFieldMapping->csv.szFormat[0]) != NULL)  // originally '('
                 bMatch = CheckRegex(pCsvFieldValue, pFieldMapping->csv.szFormat);  // e.g. AssetType matching "(EQ)" (containing "EQ") ?
               else
                 bMatch = (*pCsvFieldValue != '\0');  // field non-empty ?
@@ -3984,7 +4020,7 @@ int main(int argc, char **argv)
   //char ch;
 
   puts("");
-  puts("FundsXML-CSV-Converter Version 1.02 from 01.04.2019");
+  puts("FundsXML-CSV-Converter Version 1.03 from 27.07.2019");
   puts("Open source command line tool for the FundsXML community");
   puts("Source code is available under the MIT open source licence");
   puts("on GitHub: https://github.com/peterraf/csv-xml-converter and http://www.xml-tools.net");
@@ -4024,6 +4060,10 @@ int main(int argc, char **argv)
   // TPT mappings:
   // convert -c c2x -i tpt-input.csv -m tpt-mapping.csv -o tpt-output.xml -e tpt-errors.csv
   // convert -c x2c -i tpt-input.xml -m tpt-mapping.csv -t tpt-template.csv -o tpt-output.csv -e tpt-errors2.csv
+  //
+  // TPT to HOLDINGS mappings:
+  // convert -c c2x -i tpt-holdings-input.csv -m tpt-holdings-mapping.csv -o tpt-holdings-output.xml -e tpt-holdings-errors.csv
+  // convert -c x2c -i tpt-holdings-input.xml -m tpt-holdings-mapping.csv -t tpt-holdings-template.csv -o tpt-holdings-output.csv -e tpt-holdings-errors2.csv
   //
   // BATCH CONVERSIONS:
   //
@@ -4280,7 +4320,7 @@ int main(int argc, char **argv)
   }
 
 ProcEnd:
-  /*
+  /*  
   // used for easier testing
   puts("\nPress <Enter> to continue/close window\n");
   getchar();
